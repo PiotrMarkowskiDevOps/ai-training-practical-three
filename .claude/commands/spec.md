@@ -33,7 +33,12 @@ Keep questions concise. Ask the most important ones first. If `$ARGUMENTS` alrea
 
 ## Step 2 — Write the spec
 
-Once you have enough information, write the specification to `specs/current.md`. Use this exact structure:
+Once you have enough information, write the specification in two places:
+
+1. **Named file** — `specs/NN-function-name.md` where `NN` is the challenge number (e.g. `specs/04-generate-slots.md`). Derive the number from the challenge being worked on, or ask if unclear.
+2. **Current file** — also write the same content to `specs/current.md` (overwrite it). This is what `/build` reads.
+
+Use this exact structure for both files:
 
 ```markdown
 # Spec: <function name>
@@ -92,6 +97,6 @@ def test_something():
 
 ## Step 3 — Confirm with the developer
 
-After writing `specs/current.md`, briefly summarise what you wrote (3–5 bullets) and ask: "Does this capture everything, or is there anything to adjust?"
+After writing both files, briefly summarise what you wrote (3–5 bullets) and ask: "Does this capture everything, or is there anything to adjust?"
 
 Do not proceed to implement anything. The spec is the deliverable.
