@@ -16,38 +16,75 @@ import openpyxl
 from ortools.sat.python import cp_model
 
 
-def parse_availability(filepath: str) -> tuple[list[date], dict[str, dict[date, bool]]]:
+def parse_availability(filepath: str) -> tuple:
     """Read trainer availability from an xlsx file.
 
-    Returns (dates, trainers) where dates is a sorted list of date objects
-    and trainers maps trainer name -> {date -> bool}.
+    Basic format (basic.xlsx): returns (dates, trainers).
+    Extended format (intermediate/advanced.xlsx): returns (dates, trainers, trainer_info, weekly_caps).
     """
     wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
     ws = wb.active
-
     rows = list(ws.iter_rows(values_only=True))
     wb.close()
 
-    # Parse dates from header row (row 0), skipping column A ("Name")
     header = rows[0]
+
+    # Detect format: try parsing header[1] as a date
+    extended = False
+    try:
+        date.fromisoformat(str(header[1]))
+    except (ValueError, TypeError):
+        extended = True
+
+    date_start = 4 if extended else 1
+
+    # Parse dates from header (starting at date_start)
     dates: list[date] = []
-    for cell in header[1:]:
+    for cell in header[date_start:]:
         if cell is not None:
-            dates.append(date.fromisoformat(str(cell)))
+            try:
+                dates.append(date.fromisoformat(str(cell)))
+            except (ValueError, TypeError):
+                pass
     dates = sorted(dates)
 
-    # Parse trainer rows (rows 1+)
     trainers: dict[str, dict[date, bool]] = {}
+    trainer_info: dict[str, dict] = {}
+    weekly_caps: dict[tuple[int, int], int] = {}
+    cap_row = None
+
     for row in rows[1:]:
-        if not row or row[0] is None:
+        if not row:
+            continue
+        if row[0] is None:
+            if extended:
+                cap_row = row
             continue
         name = str(row[0]).strip()
         avail: dict[date, bool] = {}
         for i, d in enumerate(dates):
-            cell_val = row[i + 1] if (i + 1) < len(row) else None
+            col_idx = date_start + i
+            cell_val = row[col_idx] if col_idx < len(row) else None
             avail[d] = cell_val == "Yes"
         trainers[name] = avail
+        if extended:
+            trainer_info[name] = {
+                "home_location": str(row[1]).strip() if row[1] else None,
+                "french_speaking": str(row[2]).strip() == "Yes" if row[2] else False,
+                "max_per_week": int(row[3]) if row[3] is not None else None,
+            }
 
+    # Parse weekly caps from cap row (values appear on Monday columns only)
+    if extended and cap_row is not None:
+        for i, d in enumerate(dates):
+            col_idx = date_start + i
+            cap_val = cap_row[col_idx] if col_idx < len(cap_row) else None
+            if cap_val is not None:
+                yr, wk, _ = d.isocalendar()
+                weekly_caps[(yr, wk)] = int(cap_val)
+
+    if extended:
+        return (dates, trainers, trainer_info, weekly_caps)
     return (dates, trainers)
 
 
@@ -187,6 +224,31 @@ def schedule_optimal(
                 if name in experienced and (t_idx, s_idx) in x
             ]
             model.add(sum(exp_vars) >= active[s_idx])
+
+    # Per-trainer weekly cap
+    if trainer_info:
+        for t_idx, name in enumerate(trainer_names):
+            max_pw = (trainer_info.get(name) or {}).get("max_per_week")
+            if not max_pw:
+                continue
+            week_slots: dict[tuple[int, int], list] = defaultdict(list)
+            for s_idx, (d1, _) in enumerate(slots):
+                if (t_idx, s_idx) in x:
+                    yr, wk, _ = d1.isocalendar()
+                    week_slots[(yr, wk)].append(x[t_idx, s_idx])
+            for week_vars in week_slots.values():
+                model.add(sum(week_vars) <= max_pw // 2)
+
+    # Per-week total bootcamp cap
+    if weekly_caps:
+        week_active: dict[tuple[int, int], list] = defaultdict(list)
+        for s_idx, (d1, _) in enumerate(slots):
+            yr, wk, _ = d1.isocalendar()
+            week_active[(yr, wk)].append(active[s_idx])
+        for week_key, week_vars in week_active.items():
+            cap = weekly_caps.get(week_key)
+            if cap is not None:
+                model.add(sum(week_vars) <= cap)
 
     model.maximize(sum(active))
 
