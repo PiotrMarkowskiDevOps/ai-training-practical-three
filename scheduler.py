@@ -47,3 +47,35 @@ def parse_availability(filepath: str) -> tuple[list[date], dict[str, dict[date, 
         trainers[name] = avail
 
     return (dates, trainers)
+
+
+def generate_slots(
+    dates: list[date],
+    trainers: dict[str, dict[date, bool]],
+    pattern: str = "mon-tue,thu-fri",
+) -> list[tuple[date, date]]:
+    """Find all valid bootcamp slots from available dates and trainer availability.
+
+    A slot is a (day1, day2) pair matching the pattern (Mon-Tue or Thu-Fri)
+    where at least 2 trainers are available on both days.
+    """
+    patterns = [p.strip().lower() for p in pattern.split(",")]
+    allowed_weekday_pairs: set[tuple[int, int]] = set()
+    if "mon-tue" in patterns:
+        allowed_weekday_pairs.add((0, 1))
+    if "thu-fri" in patterns:
+        allowed_weekday_pairs.add((3, 4))
+
+    slots: list[tuple[date, date]] = []
+    for i in range(len(dates) - 1):
+        d1, d2 = dates[i], dates[i + 1]
+        if (d1.weekday(), d2.weekday()) not in allowed_weekday_pairs:
+            continue
+        available_both = [
+            name for name, avail in trainers.items()
+            if avail.get(d1, False) and avail.get(d2, False)
+        ]
+        if len(available_both) >= 2:
+            slots.append((d1, d2))
+
+    return slots
