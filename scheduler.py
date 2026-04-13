@@ -94,6 +94,7 @@ def schedule_greedy(
     """
     booked: set[tuple[str, date]] = set()
     schedule: list[dict] = []
+    experienced: set[str] = config.get("experienced", set()) if config else set()
 
     for d1, d2 in slots:
         candidates = sorted(
@@ -105,7 +106,19 @@ def schedule_greedy(
         )
         if len(candidates) < 2:
             continue
-        assigned = candidates[:2]
+
+        if experienced:
+            exp_candidates = [c for c in candidates if c in experienced]
+            if not exp_candidates:
+                continue
+            first = exp_candidates[0]
+            remaining = [c for c in candidates if c != first]
+            if not remaining:
+                continue
+            assigned = sorted([first, remaining[0]])
+        else:
+            assigned = candidates[:2]
+
         for name in assigned:
             booked.add((name, d1))
             booked.add((name, d2))
