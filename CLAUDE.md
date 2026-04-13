@@ -36,3 +36,12 @@ python3 -m pytest tests/test_01_availability.py -v   # one challenge
 ## Where to Start
 
 Run `/next`.
+
+## Git Workflow
+
+After each challenge is complete and tests pass, commit the work:
+
+- Use **Conventional Commits** format: `type(scope): description`
+- Scope should reflect the challenge, e.g. `feat(scheduler): add parse_availability`
+- One-liner only — no body, no bullet points
+- **Never** add `Co-Authored-By`, AI attribution, or any mention of Claude in commit messages or PRs
