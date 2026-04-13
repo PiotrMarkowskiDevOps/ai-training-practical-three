@@ -79,3 +79,36 @@ def generate_slots(
             slots.append((d1, d2))
 
     return slots
+
+
+def schedule_greedy(
+    dates: list[date],
+    trainers: dict[str, dict[date, bool]],
+    slots: list[tuple[date, date]],
+    config: dict | None = None,
+) -> list[dict]:
+    """Greedily assign 2 trainers to each slot, skipping slots where fewer than 2 are free.
+
+    Trainers are selected alphabetically for determinism. A trainer can only
+    be booked once per day across all scheduled bootcamps.
+    """
+    booked: set[tuple[str, date]] = set()
+    schedule: list[dict] = []
+
+    for d1, d2 in slots:
+        candidates = sorted(
+            name for name, avail in trainers.items()
+            if avail.get(d1, False)
+            and avail.get(d2, False)
+            and (name, d1) not in booked
+            and (name, d2) not in booked
+        )
+        if len(candidates) < 2:
+            continue
+        assigned = candidates[:2]
+        for name in assigned:
+            booked.add((name, d1))
+            booked.add((name, d2))
+        schedule.append({"slot": (d1, d2), "trainers": assigned})
+
+    return schedule
