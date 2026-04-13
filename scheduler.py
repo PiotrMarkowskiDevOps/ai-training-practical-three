@@ -12,8 +12,18 @@
 
 from collections import defaultdict
 from datetime import date
+import holidays as hols
 import openpyxl
 from ortools.sat.python import cp_model
+
+LOCATION_COUNTRY_CODES: dict[str, str] = {
+    "london": "GB",
+    "manchester": "GB",
+    "bristol": "GB",
+    "paris": "FR",
+    "amsterdam": "NL",
+    "stockholm": "SE",
+}
 
 
 def parse_availability(filepath: str) -> tuple:
@@ -283,7 +293,17 @@ def schedule_optimal(
                 sum(y[s_idx, l_idx] for s_idx in range(n_slots)) <= loc.get("demand", 0)
             )
 
-    model.maximize(sum(active))
+    BIG_M = 1000
+    if weightings:
+        weight_bonus = sum(
+            weightings.get(name, 0) * x[t_idx, s_idx]
+            for t_idx, name in enumerate(trainer_names)
+            for s_idx in range(n_slots)
+            if (t_idx, s_idx) in x
+        )
+        model.maximize(BIG_M * sum(active) + weight_bonus)
+    else:
+        model.maximize(BIG_M * sum(active))
 
     status = solver.solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
@@ -329,3 +349,43 @@ def parse_locations(filepath: str) -> list[dict]:
             "french_required": str(row[3]).strip() == "Yes" if row[3] else False,
         })
     return locations
+
+
+def apply_bank_holidays(
+    trainers: dict[str, dict[date, bool]],
+    trainer_info: dict[str, dict],
+) -> None:
+    """Block trainer availability on public holidays for their home country.
+
+    Modifies trainers in place. Uses the holidays library with a city→country mapping.
+    """
+    for name, avail in trainers.items():
+        info = trainer_info.get(name) or {}
+        home = str(info.get("home_location") or "").lower().strip()
+        country_code = LOCATION_COUNTRY_CODES.get(home)
+        if not country_code:
+            continue
+        years = {d.year for d in avail}
+        country_holidays = hols.country_holidays(country_code, years=years)
+        for d in avail:
+            if d in country_holidays:
+                avail[d] = False
+
+
+def parse_weightings(filepath: str) -> dict[str, int]:
+    """Read the Weightings sheet from an xlsx file.
+
+    Returns a dict mapping trainer name to integer weight.
+    """
+    wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
+    ws = wb["Weightings"]
+    rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+
+    weightings: dict[str, int] = {}
+    for row in rows[1:]:  # skip header
+        if not row or row[0] is None:
+            continue
+        name = str(row[0]).strip()
+        weightings[name] = int(row[1]) if row[1] is not None else 0
+    return weightings
