@@ -250,6 +250,39 @@ def schedule_optimal(
             if cap is not None:
                 model.add(sum(week_vars) <= cap)
 
+    # Location assignment
+    y: dict[tuple[int, int], cp_model.IntVar] = {}
+    if locations:
+        n_locs = len(locations)
+        french_speakers: set[str] = {
+            name for name, info in (trainer_info or {}).items()
+            if info.get("french_speaking", False)
+        }
+        for s_idx in range(n_slots):
+            for l_idx in range(n_locs):
+                y[s_idx, l_idx] = model.new_bool_var(f"y_{s_idx}_{l_idx}")
+
+        # Each active slot assigned to exactly 1 location
+        for s_idx in range(n_slots):
+            model.add(sum(y[s_idx, l_idx] for l_idx in range(n_locs)) == active[s_idx])
+
+        # French constraint: French-required locations need a French-speaking trainer
+        for l_idx, loc in enumerate(locations):
+            if loc.get("french_required"):
+                for s_idx in range(n_slots):
+                    fr_vars = [
+                        x[t_idx, s_idx]
+                        for t_idx, name in enumerate(trainer_names)
+                        if name in french_speakers and (t_idx, s_idx) in x
+                    ]
+                    model.add(sum(fr_vars) >= y[s_idx, l_idx])
+
+        # Demand cap per location
+        for l_idx, loc in enumerate(locations):
+            model.add(
+                sum(y[s_idx, l_idx] for s_idx in range(n_slots)) <= loc.get("demand", 0)
+            )
+
     model.maximize(sum(active))
 
     status = solver.solve(model)
@@ -264,6 +297,35 @@ def schedule_optimal(
             name for t_idx, name in enumerate(trainer_names)
             if (t_idx, s_idx) in x and solver.value(x[t_idx, s_idx])
         )
-        result.append({"slot": (d1, d2), "trainers": assigned})
+        entry: dict = {"slot": (d1, d2), "trainers": assigned}
+        if locations:
+            for l_idx, loc in enumerate(locations):
+                if solver.value(y[s_idx, l_idx]):
+                    entry["location"] = loc["name"]
+                    break
+        result.append(entry)
 
     return result
+
+
+def parse_locations(filepath: str) -> list[dict]:
+    """Read the Locations sheet from an xlsx file.
+
+    Returns a list of dicts with name, country, demand, french_required.
+    """
+    wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
+    ws = wb["Locations"]
+    rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+
+    locations = []
+    for row in rows[1:]:  # skip header
+        if not row or row[0] is None:
+            continue
+        locations.append({
+            "name": str(row[0]).strip(),
+            "country": str(row[1]).strip() if row[1] else None,
+            "demand": int(row[2]) if row[2] is not None else 0,
+            "french_required": str(row[3]).strip() == "Yes" if row[3] else False,
+        })
+    return locations
