@@ -10,8 +10,10 @@
 #
 # Each challenge adds new functions — don't remove old ones.
 
+from collections import defaultdict
 from datetime import date
 import openpyxl
+from ortools.sat.python import cp_model
 
 
 def parse_availability(filepath: str) -> tuple[list[date], dict[str, dict[date, bool]]]:
@@ -125,3 +127,81 @@ def schedule_greedy(
         schedule.append({"slot": (d1, d2), "trainers": assigned})
 
     return schedule
+
+
+def schedule_optimal(
+    dates: list[date],
+    trainers: dict[str, dict[date, bool]],
+    slots: list[tuple[date, date]],
+    config: dict | None = None,
+    trainer_info: dict | None = None,
+    weekly_caps: dict | None = None,
+    locations: list[dict] | None = None,
+    weightings: dict | None = None,
+) -> list[dict]:
+    """CP-SAT solver that maximises total bootcamps subject to all constraints."""
+    if not slots:
+        return []
+
+    model = cp_model.CpModel()
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = 30
+
+    trainer_names = sorted(trainers.keys())
+    n_trainers = len(trainer_names)
+    n_slots = len(slots)
+    experienced: set[str] = config.get("experienced", set()) if config else set()
+
+    # x[t_idx, s_idx]: trainer t assigned to slot s — only when trainer available both days
+    x: dict[tuple[int, int], cp_model.IntVar] = {}
+    for t_idx, name in enumerate(trainer_names):
+        for s_idx, (d1, d2) in enumerate(slots):
+            if trainers[name].get(d1, False) and trainers[name].get(d2, False):
+                x[t_idx, s_idx] = model.new_bool_var(f"x_{t_idx}_{s_idx}")
+
+    # active[s]: slot s is scheduled
+    active = [model.new_bool_var(f"active_{s}") for s in range(n_slots)]
+
+    # Exactly 2 trainers per active slot
+    for s_idx in range(n_slots):
+        slot_vars = [x[t_idx, s_idx] for t_idx in range(n_trainers) if (t_idx, s_idx) in x]
+        model.add(sum(slot_vars) == 2 * active[s_idx])
+
+    # No double-booking: each trainer at most 1 bootcamp per day
+    for t_idx in range(n_trainers):
+        for d in dates:
+            day_vars = [
+                x[t_idx, s_idx]
+                for s_idx, (d1, d2) in enumerate(slots)
+                if (t_idx, s_idx) in x and (d == d1 or d == d2)
+            ]
+            if day_vars:
+                model.add(sum(day_vars) <= 1)
+
+    # Experience: at least 1 experienced trainer per active slot
+    if experienced:
+        for s_idx in range(n_slots):
+            exp_vars = [
+                x[t_idx, s_idx]
+                for t_idx, name in enumerate(trainer_names)
+                if name in experienced and (t_idx, s_idx) in x
+            ]
+            model.add(sum(exp_vars) >= active[s_idx])
+
+    model.maximize(sum(active))
+
+    status = solver.solve(model)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return []
+
+    result = []
+    for s_idx, (d1, d2) in enumerate(slots):
+        if not solver.value(active[s_idx]):
+            continue
+        assigned = sorted(
+            name for t_idx, name in enumerate(trainer_names)
+            if (t_idx, s_idx) in x and solver.value(x[t_idx, s_idx])
+        )
+        result.append({"slot": (d1, d2), "trainers": assigned})
+
+    return result
